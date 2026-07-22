@@ -116,9 +116,151 @@ Geological constraints: Set GEOLOGY_TYPE to "massive_sulfide" or "graphite" to n
 Troubleshooting
 File not found – ensure FILE_PATH is correct and uses raw string (e.g., r"C:\path\to\file.xlsx").
 
+
+
+
 Memory issues – reduce MCMC_WALKERS or MCMC_STEPS if running on a low‑resource machine.
 
 Poor convergence – increase maxiter and popsize in the differential_evolution call (inside optimize_global). Also, increase MCMC_STEPS and MCMC_BURN_IN.
 
 Depth overestimation – the script includes a diagnostic function that prints correlations and profile‑to‑depth ratios. If overestimation persists, check your profile length (should be several times the expected depth).
 
+
+
+######### Workflow #######
+
+[START]
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 1. DATA LOADING & COLUMN IDENTIFICATION             │
+│    • Read Excel/CSV (multiple sheets possible)      │
+│    • Automatically detect columns:                  │
+│        - X coordinate (Easting, Station, etc.)      │
+│        - SP measurement (mV)                        │
+│        - Traverse/line identifier (if present)      │
+│    • Split data into individual profiles by line    │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 2. PRE-PROCESSING (per profile)                     │
+│    • Remove duplicate stations & NaN values         │
+│    • Sort by X coordinate                           │
+│    • Apply linear detrending (polyfit)              │
+│        → residual SP = observed – trend             │
+│    • Compute profile length & data range            │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 3. SOURCE-COUNT ESTIMATION                          │
+│    • Find peaks in |residual SP| (find_peaks)      │
+│    • Set maximum number of sources = min(peaks,     │
+│                                         MAX_SOURCES)│
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 4. MODEL SELECTION LOOP (for n = 1 to max_sources) │
+│    ┌─────────────────────────────────────────────┐ │
+│    │ 4a. Global Optimisation (Differential Evol.)│ │
+│    │    • Bounds adapted to data & geology       │ │
+│    │    • Objective: weighted sum of squares     │ │
+│    │    • Returns best-fit parameters θₙ         │ │
+│    └─────────────────────────────────────────────┘ │
+│    │                                               │
+│    └─► 4b. Compute BIC = n·ln(RSS/n) + k·ln(n)    │
+│         (k = number of parameters)                  │
+│    │                                               │
+│    └─► Keep model with lowest BIC (best_n, θ_best)│
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 5. BAYESIAN INVERSION (MCMC)                       │
+│    • Use θ_best as initial position                │
+│    • Define priors:                                 │
+│        - Uniform for K, x₀, α                      │
+│        - Geologically-informed for q & z:          │
+│            ∗ q bounds based on GEOLOGY_TYPE        │
+│              (massive_sulfide, graphite, unknown)  │
+│            ∗ z prior: Gaussian if BOREHOLE_AVAILABLE│
+│              else uniform over wider range         │
+│        - Smoothness penalty for z if multiple bodies│
+│    • Likelihood: weighted Gaussian (weights        │
+│      emphasise central part of anomaly)            │
+│    • Run emcee Ensemble Sampler:                   │
+│        - Walkers = max(MCMC_WALKERS, 2·ndim)      │
+│        - Steps = MCMC_STEPS, Burn-in = MCMC_BURN_IN│
+│    • Store full chain (steps × walkers × ndim)    │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 6. CONVERGENCE DIAGNOSTICS                         │
+│    • Compute:                                       │
+│        - Gelman-Rubin R̂ (split chains)            │
+│        - Effective Sample Size (ESS)               │
+│        - Autocorrelation time                      │
+│        - Posterior correlation matrix              │
+│    • Generate 9-panel diagnostic figure:           │
+│        - R̂ bar plot (threshold 1.1)               │
+│        - ESS bar plot (threshold 100)             │
+│        - Correlation heatmap                       │
+│        - Trace plots (z, α, q) for first body     │
+│        - Posterior histograms (z, α, q)           │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 7. PARAMETER ESTIMATION & CLASSIFICATION            │
+│    • Discard burn-in → flatten samples              │
+│    • Compute median and 90% credible intervals      │
+│      for all parameters                             │
+│    • For each body:                                 │
+│        - Shape factor q → classify:                 │
+│            ∗ q ≥ 1.3   → Sphere/Point              │
+│            ∗ 0.8 ≤ q < 1.3 → Cylinder              │
+│            ∗ q < 0.8   → Dipping Sheet             │
+│        - Depth z, angle α, horizontal position x₀  │
+│    • Store results                                  │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 8. VISUALISATION & OUTPUT                           │
+│    ┌─────────────────────────────────────────────┐  │
+│    │ 8a. Main Inversion Figure                   │  │
+│    │   - Top: SP profile with data, best-fit    │  │
+│    │     model, and 90% confidence envelope      │  │
+│    │   - Bottom: Subsurface cross-section with   │  │
+│    │     interpreted bodies (shapes/positions)   │  │
+│    └─────────────────────────────────────────────┘  │
+│    │                                               │
+│    ├─ 8b. Corner Plot (α, z, q) for first body    │
+│    │   (if single-source model)                   │
+│    │                                               │
+│    ├─ 8c. Convergence Diagnostic Figure (step 6)  │
+│    │                                               │
+│    └─ 8d. Save all figures to OUTPUT_DIR          │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ 9. OPTIONAL SYNTHETIC FIDELITY TESTS                │
+│    (triggered by user input)                       │
+│    • Generate synthetic data for:                   │
+│        - Cylinder (q=1.0, depth=60m)               │
+│        - Sphere (q=1.5, depth=60m)                 │
+│        - Dipping Sheet (q=0.5, depth=40m)          │
+│    • Add 5% Gaussian noise                         │
+│    • Run the complete inversion (steps 2–8)        │
+│      on each synthetic dataset                     │
+│    • Compare inverted with true parameters         │
+│    • Produce corner plots and combined figure      │
+│      showing fit and subsurface reconstruction     │
+└─────────────────────────────────────────────────────┘
+   │
+   ▼
+[END]
