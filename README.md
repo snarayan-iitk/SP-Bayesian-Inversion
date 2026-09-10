@@ -1,266 +1,85 @@
-# SP-Bayesian-Inversion
-This package performs Bayesian inversion of self‑potential (SP) anomalies to estimate the depth, geometry, and source parameters of subsurface bodies (spheres, cylinders, or dipping sheets). It uses the generalised SP anomaly model of Abdelrahman et al. (2006) and combines Differential Evolution for global optimisation with Markov Chain Monte Carlo (MCMC) for uncertainty quantification.
+# How to Use This Code — Quick Guide
 
-Features
-Synthetic Fidelity Tests – verify the inversion on cylinder, sphere, and sheet models with known parameters (including corner plots).
+## 1. Prerequisites
 
-Real‑Data Inversion – reads Excel/CSV files, automatically identifies SP and distance columns, detrends, and selects the optimal number of sources via BIC.
+- **Python 3.8+** with these packages installed:
+  ```
+  pip install numpy pandas matplotlib scipy emcee corner openpyxl
+  ```
+- **Windows/Excel input** supported natively (`.xlsx`). CSV also works.
+- **Runtime expectation:** ~5–20 min per profile with `MCMC_WALKERS=500, MCMC_STEPS=3000`. Synthetic tests add another ~15 min.
 
-Enhanced Constraints – optional geological priors (massive sulphide, graphite) and borehole depth constraints.
+## 2. Configure the Script (top of file)
 
-MCMC Diagnostics – trace plots, Gelman‑Rubin R‑hat, effective sample size, correlation matrices, and posterior distributions (α, z, q).
+- **`FILE_PATH`** — full path to your Excel/CSV file containing the SP profile(s).
+- **`OUTPUT_DIR`** — folder where all PNG figures and diagnostics will be saved (auto-created).
+- **`MCMC_WALKERS`** — number of ensemble walkers (default 500; keep ≥ 2× number of parameters).
+- **`MCMC_STEPS`** — total MCMC iterations (default 3000). **If you see the emcee autocorrelation warning, raise this to 15000–20000 and `MCMC_BURN_IN` to ~6000.**
+- **`MCMC_BURN_IN`** — samples discarded as burn-in (default 1000).
+- **`MAX_SOURCES`** — maximum number of overlapping bodies to test per profile (default 1).
+- **`GEOLOGY_TYPE`** — one of `"massive_sulfide"`, `"graphite"`, or `"unknown"`. This constrains the shape factor `q`.
+- **`BOREHOLES_AVAILABLE`** — set `True` if you have borehole depth control, and set `BOREHOLE_DEPTH` accordingly. Adds a soft depth prior.
 
-Visualisation – publication‑ready plots: data fit with uncertainty bands, subsurface cross‑sections, corner plots, and convergence diagnostics.
+## 3. Prepare Your Input File
 
-Installation
-Requirements
-Python ≥ 3.7
+- One **row per station**; must contain:
+  - an **X column** named one of: `Easting`, `UTMX`, `Station`, `X`, `Dist`, `Distance`
+  - an **SP column** named one of: `SP`, `SP (mV)`, `SP (mV) Final`, `PD Corrected Final SP (mV)`
+  - *(optional)* a **traverse / line column** (`Traverse`, `Traverse (Y)`, `Line`) → the script will auto-split into profiles.
+- If no traverse column exists, the whole sheet is treated as one profile.
+- Missing X/SP values are dropped; duplicate X values are removed automatically.
 
-Packages: numpy, pandas, matplotlib, scipy, emcee, corner, openpyxl (for Excel)
+## 4. Run the Script
 
-Install all dependencies using pip:
+- From a terminal:
+  ```
+  python your_script_name.py
+  ```
+- You will be prompted:
+  ```
+  Do you want to run Synthetic Fidelity Tests (Cylinder, Sphere & Sheet) with Corner Plots? (y/n):
+  ```
+  - **`y`** → runs three synthetic validation tests first (ground truth = cylinder, sphere, sheet). **Do this at least once** to verify the inversion is behaving.
+  - **`n`** → skips straight to processing your real data.
 
-bash
-pip install numpy pandas matplotlib scipy emcee corner openpyxl
-All user‑adjustable settings are at the top of the script (USER CONFIGURATION section). Open the script in a text editor and modify:
+## 5. What the Script Does (per profile)
 
-Parameter	Description
-FILE_PATH	Full path to your input Excel/CSV file.
-OUTPUT_DIR	Directory where all plots and results will be saved.
-MAX_SOURCES	Maximum number of overlapping bodies to test per profile.
-MCMC_WALKERS, MCMC_STEPS, MCMC_BURN_IN	MCMC parameters (increase for more robust sampling).
-CONFIDENCE_INTERVAL	Confidence level for uncertainty bands (e.g., 90).
-GEOLOGY_TYPE	"massive_sulfide", "graphite", or "unknown" – constrains the shape factor q.
-BOREHOLE_DEPTH	Known depth from borehole (in metres).
-BOREHOLES_AVAILABLE	Set True to enable depth prior (penalises deviations from borehole depth).
-Font sizes	TITLE_FONT, LABEL_FONT, TICK_FONT, LEGEND_FONT for plotting.
-Note: The script automatically identifies SP and distance columns by common names (e.g., "PD Corrected Final SP (mV)", "Easting"). If your column names differ, update the identify_columns_robust function accordingly.
+1. Loads the sheet and (optionally) splits by traverse.
+2. Removes a linear regional trend.
+3. Runs **Differential Evolution** to find a global starting point for each candidate number of sources.
+4. Selects the best number of bodies using **BIC**.
+5. Runs **MCMC (`emcee`)** for posterior sampling.
+6. Produces and saves the following figures into `OUTPUT_DIR`:
 
-Running the Code
-Simply execute the script:
+| File | Contents |
+|---|---|
+| `<profile>_Inversion.png` | Data fit + R² + 2-panel subsurface cross-section |
+| `<profile>_Convergence.png` | 9-panel diagnostics: R-hat, ESS, correlation matrix, trace & posterior plots for z, α, q |
+| `<profile>_Corner_alpha_z_q.png` | Corner plot of α, z, q (single-body case only) |
+| `Synthetic_*.png` (if `y`) | Validation fits and corner plots for the 3 test models |
 
-bash
-python your_script.py
-You will be prompted:
+## 6. What to Check in the Output
 
-text
-Do you want to run Synthetic Fidelity Tests (Cylinder, Sphere & Sheet) with Corner Plots? (y/n):
-Type y to run the synthetic tests first (recommended to validate the inversion).
+- **Convergence figure:**
+  - R-hat bars must all be **< 1.1** (green).
+  - ESS bars should exceed **100**.
+  - Trace plots should look like "fuzzy caterpillars", not slow drifts.
+- **Correlation matrix:** strong off-diagonal colours (|r| > 0.7) indicate K↔z↔q trade-offs — treat depth estimates with caution.
+- **Console output:** the script prints a `DEPTH OVERESTIMATION DIAGNOSIS` block with correlations, CIs, and a warning if the profile is too short relative to depth.
+- **R²** in the main figure — values > 0.9 indicate a good fit; low R² → try `MAX_SOURCES = 2` or increase MCMC steps.
 
-Type n to skip directly to inverting your real data.
+## 7. Common Troubleshooting
 
-After the synthetic tests (or if skipped), the code reads your data file, processes each sheet/traverse, and performs inversion. Results (plots and summaries) are saved in OUTPUT_DIR.
+- **`emcee.autocorr` warning ("chain shorter than 50×τ")** → increase `MCMC_STEPS` and `MCMC_BURN_IN`; consider fixing `q` if geology is known.
+- **Depth hits the upper bound (500 m)** → profile may be too short; extend survey or reduce `MAX_SOURCES`.
+- **R-hat > 1.1** → longer MCMC, or check that `GEOLOGY_TYPE` bounds are not too restrictive.
+- **`File not found`** → check `FILE_PATH` uses a raw string: `r"C:\...\file.xlsx"`.
+- **Figures not displaying** → if you're running headless (server/Jupyter without display), add `SHOW_PLOTS = False` (may need to be re-added manually) or set `matplotlib.use('Agg')` at the top.
+- **Very slow runs** → lower `MCMC_WALKERS` to 200 and `MCMC_STEPS` to 2000 for a quick look; always re-run with full settings for final results.
 
-Input Data Format
-Excel (.xlsx) with multiple sheets, or CSV (single sheet).
+## 8. Recommended Workflow
 
-Each sheet/table must contain:
-
-A column with distance/easting (e.g., "Easting", "Station (X)").
-
-A column with SP values (e.g., "PD Corrected Final SP (mV)", "SP (mV)").
-
-Optional: a column grouping traverses (e.g., "Traverse (Y)"). If present, the code processes each traverse separately.
-
-The code automatically removes linear trends and identifies the number of sources based on peak detection.
-
-Outputs
-For each processed profile, the following are generated in OUTPUT_DIR:
-
-Main inversion plot
-
-{profile_name}_Inversion.png – data fit with uncertainty bands (red), and a cross‑section showing inferred source(s) with depth, angle, and shape.
-
-Convergence diagnostics
-
-{profile_name}_Convergence.png – 9‑panel figure with R‑hat, ESS, correlation matrix, trace plots, and posterior histograms for z, α, q.
-
-Corner plot (real data)
-
-{profile_name}_Corner_alpha_z_q.png – pairwise posterior distributions for the key parameters of the first body.
-
-Synthetic tests (if run)
-
-Corner_Plot_Cylinder_alpha_z_q.png, etc. – corner plots for each synthetic model.
-
-Synthetic_Cylinder_Sphere_Sheet_Tests.png – side‑by‑side comparison of data fits and subsurface reconstructions.
-
-All plots are high‑resolution (300 dpi) and ready for publication.
-
-Interpreting the Results
-Shape factor (q)
-
-q ≥ 1.3 → sphere/point source.
-
-0.8 ≤ q < 1.3 → cylinder (horizontal).
-
-q < 0.8 → dipping sheet.
-
-Depth (z) – given in metres. The 90% credible interval is shown in the plots and printed in the console.
-
-Angle (α) – polarisation angle (degrees), indicates the direction of polarisation.
-
-R‑hat values – should be close to 1.0 (ideally < 1.1) for convergence. If not, increase MCMC_STEPS or MCMC_WALKERS.
-
-Effective sample size (ESS) – should be > 100 for reliable parameter estimates.
-
-Correlation matrix – high correlations (e.g., between K and z) indicate trade‑offs; this is typical and the MCMC should still provide valid uncertainties.
-
-Customising for Your Data
-Column mapping: If the automatic column identification fails, edit the identify_columns_robust function and add your exact column names to the lists.
-
-Trend removal: The code uses a linear detrend. If your data has a more complex background, you can modify the remove_trend function (e.g., use polynomial or spline).
-
-Geological constraints: Set GEOLOGY_TYPE to "massive_sulfide" or "graphite" to narrow the q bounds. If you have borehole information, set BOREHOLES_AVAILABLE = True and provide BOREHOLE_DEPTH – this adds a weak prior to guide depth estimation.
-
-Troubleshooting
-File not found – ensure FILE_PATH is correct and uses raw string (e.g., r"C:\path\to\file.xlsx").
-
-
-
-
-Memory issues – reduce MCMC_WALKERS or MCMC_STEPS if running on a low‑resource machine.
-
-Poor convergence – increase maxiter and popsize in the differential_evolution call (inside optimize_global). Also, increase MCMC_STEPS and MCMC_BURN_IN.
-
-Depth overestimation – the script includes a diagnostic function that prints correlations and profile‑to‑depth ratios. If overestimation persists, check your profile length (should be several times the expected depth).
-
-
-
-######### Workflow #######
-
-[START]
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 1. DATA LOADING & COLUMN IDENTIFICATION             │
-│    • Read Excel/CSV (multiple sheets possible)      │
-│    • Automatically detect columns:                  │
-│        - X coordinate (Easting, Station, etc.)      │
-│        - SP measurement (mV)                        │
-│        - Traverse/line identifier (if present)      │
-│    • Split data into individual profiles by line    │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 2. PRE-PROCESSING (per profile)                     │
-│    • Remove duplicate stations & NaN values         │
-│    • Sort by X coordinate                           │
-│    • Apply linear detrending (polyfit)              │
-│        → residual SP = observed – trend             │
-│    • Compute profile length & data range            │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 3. SOURCE-COUNT ESTIMATION                          │
-│    • Find peaks in |residual SP| (find_peaks)      │
-│    • Set maximum number of sources = min(peaks,     │
-│                                         MAX_SOURCES)│
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 4. MODEL SELECTION LOOP (for n = 1 to max_sources) │
-│    ┌─────────────────────────────────────────────┐ │
-│    │ 4a. Global Optimisation (Differential Evol.)│ │
-│    │    • Bounds adapted to data & geology       │ │
-│    │    • Objective: weighted sum of squares     │ │
-│    │    • Returns best-fit parameters θₙ         │ │
-│    └─────────────────────────────────────────────┘ │
-│    │                                               │
-│    └─► 4b. Compute BIC = n·ln(RSS/n) + k·ln(n)    │
-│         (k = number of parameters)                  │
-│    │                                               │
-│    └─► Keep model with lowest BIC (best_n, θ_best)│
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 5. BAYESIAN INVERSION (MCMC)                       │
-│    • Use θ_best as initial position                │
-│    • Define priors:                                 │
-│        - Uniform for K, x₀, α                      │
-│        - Geologically-informed for q & z:          │
-│            ∗ q bounds based on GEOLOGY_TYPE        │
-│              (massive_sulfide, graphite, unknown)  │
-│            ∗ z prior: Gaussian if BOREHOLE_AVAILABLE│
-│              else uniform over wider range         │
-│        - Smoothness penalty for z if multiple bodies│
-│    • Likelihood: weighted Gaussian (weights        │
-│      emphasise central part of anomaly)            │
-│    • Run emcee Ensemble Sampler:                   │
-│        - Walkers = max(MCMC_WALKERS, 2·ndim)      │
-│        - Steps = MCMC_STEPS, Burn-in = MCMC_BURN_IN│
-│    • Store full chain (steps × walkers × ndim)    │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 6. CONVERGENCE DIAGNOSTICS                         │
-│    • Compute:                                       │
-│        - Gelman-Rubin R̂ (split chains)            │
-│        - Effective Sample Size (ESS)               │
-│        - Autocorrelation time                      │
-│        - Posterior correlation matrix              │
-│    • Generate 9-panel diagnostic figure:           │
-│        - R̂ bar plot (threshold 1.1)               │
-│        - ESS bar plot (threshold 100)             │
-│        - Correlation heatmap                       │
-│        - Trace plots (z, α, q) for first body     │
-│        - Posterior histograms (z, α, q)           │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 7. PARAMETER ESTIMATION & CLASSIFICATION            │
-│    • Discard burn-in → flatten samples              │
-│    • Compute median and 90% credible intervals      │
-│      for all parameters                             │
-│    • For each body:                                 │
-│        - Shape factor q → classify:                 │
-│            ∗ q ≥ 1.3   → Sphere/Point              │
-│            ∗ 0.8 ≤ q < 1.3 → Cylinder              │
-│            ∗ q < 0.8   → Dipping Sheet             │
-│        - Depth z, angle α, horizontal position x₀  │
-│    • Store results                                  │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 8. VISUALISATION & OUTPUT                           │
-│    ┌─────────────────────────────────────────────┐  │
-│    │ 8a. Main Inversion Figure                   │  │
-│    │   - Top: SP profile with data, best-fit    │  │
-│    │     model, and 90% confidence envelope      │  │
-│    │   - Bottom: Subsurface cross-section with   │  │
-│    │     interpreted bodies (shapes/positions)   │  │
-│    └─────────────────────────────────────────────┘  │
-│    │                                               │
-│    ├─ 8b. Corner Plot (α, z, q) for first body    │
-│    │   (if single-source model)                   │
-│    │                                               │
-│    ├─ 8c. Convergence Diagnostic Figure (step 6)  │
-│    │                                               │
-│    └─ 8d. Save all figures to OUTPUT_DIR          │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-┌─────────────────────────────────────────────────────┐
-│ 9. OPTIONAL SYNTHETIC FIDELITY TESTS                │
-│    (triggered by user input)                       │
-│    • Generate synthetic data for:                   │
-│        - Cylinder (q=1.0, depth=60m)               │
-│        - Sphere (q=1.5, depth=60m)                 │
-│        - Dipping Sheet (q=0.5, depth=40m)          │
-│    • Add 5% Gaussian noise                         │
-│    • Run the complete inversion (steps 2–8)        │
-│      on each synthetic dataset                     │
-│    • Compare inverted with true parameters         │
-│    • Produce corner plots and combined figure      │
-│      showing fit and subsurface reconstruction     │
-└─────────────────────────────────────────────────────┘
-   │
-   ▼
-[END]
+1. Run once with **synthetic tests enabled** to confirm installation and correctness.
+2. Run on your real sheet with default settings.
+3. Inspect `_Convergence.png` — if R-hat > 1.1 or ESS < 100, lengthen the chain and re-run.
+4. Only trust the depth/angle outputs when diagnostics are green and the profile length is ≥ 3× the recovered depth.
